@@ -1,0 +1,400 @@
+mutable struct MicroEstados
+    σ::Array{Int,1} #Arreglo de spines aleatorios
+    N::Int          #Arreglo de N×N de spines
+    frio::Array{Int,1} #Arreglo de spines alineados
+    redCaliente::Array{Int,2}
+    redFria::Array{Int,2}
+end
+
+"""
+Red de spines caliente, donde se puede medir la proporción de spines "abajo" por
+medio de f, siendo 1 todos abajo y 0 ningún abajo
+"""
+
+#Definimos una función que nos genere la red de spines con valores ∈{1,-1}
+function redSpinesCaliente(N,f::Float64)
+    red = ones(Int,N,N)
+    for i in 1:N
+        for j in 1:N
+            if rand() <= f
+                red[i,j] = -1
+            end
+        end
+    end
+    return red
+end
+    
+redSpinesFrio(N) = ones(Int,N,N)
+
+
+"""
+La función devuelve un vector con las entradas de la matriz de espines
+
+N := longitud del arreglo cuadrado de N×N
+f := porcentaje de spines abajo de la red de spines 
+"""
+function Configuraciones(N::Int,f::Float64)
+    redCaliente = redSpinesCaliente(N::Int,f::Float64)
+    lista = []
+    for i in 1:N
+        for j in 1:N
+            push!(lista,redCaliente[i,j])
+        end
+    end
+    redFria = redSpinesFrio(N)
+    frio = ones(N^2)
+    
+    MicroEstados(lista,N,frio,redCaliente,redFria)
+end
+
+"""
+Generamos la lista de los primeros vecinos para un sitio (i,j) en la matriz y para
+un sitio i del vector generado por la función Lista. La lista vendrá en la siguiente
+configuración [arriba,derecha,abajo,izquierda]
+
+Parámetros:
+
+m := Microestado que guarda la información de la red 
+     de spines de N×N y la longitud N.
+i := sitio al que nos queremos enfocar
+conf := configuracion caliente o fria
+"""
+function vecinos(m::MicroEstados,i::Int,conf::String)
+    N² = (m.N)^2
+    N = m.N
+    
+    #Para el vecino de arriba
+    if i <= N²
+        arriba = i + N
+        if arriba > N²
+            arriba = i - N*(N-1)
+        end
+    end
+    
+    #Para el vecino de la derecha
+    if mod(i,N) != 0
+        derecha = i + 1
+    else
+        derecha = i - N + 1
+    end
+    
+    #Para el vecino de abajo
+    if i - N >= 1
+        abajo = i - N
+    else i - N < 1
+        abajo = i + N*(N-1)
+    end  
+    
+    #Para el vecino de la izquierda
+    if mod(i-1,N) != 0
+        izquierda = i - 1
+    else
+        izquierda = i + N - 1
+    end
+
+    #Regresa los índices, recuerda
+    if conf == "caliente"
+        return [m.σ[arriba],m.σ[derecha],m.σ[abajo],m.σ[izquierda]]
+    elseif conf == "fria"
+        [m.frio[arriba],m.frio[derecha],m.frio[abajo],m.frio[izquierda]]
+    end
+end
+
+
+
+"""
+Ahora generamos la energía de interacción entre átomos dada por
+E = -J⋅∑s_is_j
+
+Parámetros:
+
+m := Micro Estado con configuracion caliente y fria
+i := sitio
+conf := configuracion fría o caliente
+
+"""
+function energia_i(m::MicroEstados,i::Int,conf::String)
+    J = 0.5 #se escogió este valor por consenso en clase
+    σi = m.σ[i]
+    frio = m.frio[i]
+    
+    primerosVecinos = vecinos(m,i,conf)
+    suma = sum(primerosVecinos)
+    
+    if conf == "caliente"
+        return -2J*σi*suma
+    elseif conf == "fria"
+        return -2J*frio*suma
+    end
+end  
+
+function energiaTotal(m::MicroEstados,conf::String)
+    sum = 0
+    for i in 1:m.N^2
+        sum += energia_i(m,i,conf)
+    end
+    return sum
+end
+
+#TEMPERATURA CRÍTICA
+
+#Igualando la ecuación trascendental a cero y quedándonos con el lado izquierdo
+tempCritica(T) = 2*tanh(1/T)^2 - 1 
+
+function Dcentrada(f,a,h)
+    derivada = (f(a+h) - f(a-h))/2h
+    return derivada
+end
+
+function newtonRhapson(f,x_inicial,epsilon,n)
+    h=0.0001
+    if n==1
+        return x_inicial
+    elseif n > 1
+        iteracion = newtonRhapson(f,x_inicial,epsilon,n-1)-f(newtonRhapson(f,x_inicial,epsilon,n-1))/Dcentrada(f,newtonRhapson(f,x_inicial,epsilon,n-1),h)
+    end
+    return iteracion
+end
+
+# COMENZAMOS CON ALGORÍTMO METROPOLIS
+
+"""
+Generamos una función para voltear el spín; se va a utilizar para
+pasar de una configuración C_j a una C_k después de cierto número de pasos.
+
+Parámetros
+
+m := MicroEstado
+i := Sitio de la configuración de la lista de spines generada.
+j := j-ésimo renglón de la red de spines caliente/fría
+k := k-ésima columna de la red de spines caliente/fría
+conf := configuración fria o caliente.
+"""
+function volteaSpin(m::MicroEstados,i::Int,j::Int,k::Int,conf::String) 
+    
+    if conf == "caliente"
+        m.redCaliente[j,k] *= -1
+        m.σ[i] *= -1 #De esta manera se voltean los ±1
+    elseif conf == "fria"
+        m.redFria[j,k] *= -1
+        m.frio[i] *= -1
+    end
+end
+
+function volteaSpin1(m::MicroEstados,i::Int,conf::String) 
+    
+    if conf == "caliente"
+        return m.σ[i] *= -1 #De esta manera se voltean los ±1
+    elseif conf == "fria"
+        return m.frio[i] *= -1
+    end
+end
+
+"""
+Generamos una función para cambiar de Micro Estado, si estamos en uno C_j y queremos
+cambiar a otro C_k, proponemos ese cambio en lugar de pasar por un número n de
+micro estados, esperando que de esta manera C_j y C_k no estén correlacionados.
+
+Parámetros
+
+m := MicroEstado
+conf := configuracion caliente o fría
+
+"""
+function eleccionDeMicroEstado(m::MicroEstados,conf::String)
+    i = rand(1:m.N^2)
+    j , k = rand(1:m.N), rand(1:m.N)
+    ΔE = -energia_i(m,i,conf)
+    
+    return ΔE, i, j, k
+end
+
+"""
+Magnetización total es la suma de todos los spines de la configuración
+
+Parámetros:
+
+m    := MicroEstados
+conf := configuración caliente o fría
+"""
+
+function magnetizacion(m::MicroEstados,conf::String)
+    if conf == "caliente"
+        return sum(m.σ)
+    elseif conf == "fria"
+        return sum(m.frio)
+    end
+end
+
+
+"""
+Generamos el paso Metropolis-MonteCarlo que consiste en ubicarse en un Micro Estado
+arbitrario para voltearle el spin y calcular su energía de interacción con sus vecinos.
+El micro estado se acepta si cumple que el mínimo entre e^(-β*ΔE) y 1 es mayor a un 
+número aleatorio entre 0 y 1. Las pruebas en la simulación se harán para una temperatura
+fría y otra caliente.
+
+Parámteros
+
+m := MicroEstado
+T := Temperatura
+conf := configuración caliente o fria
+
+"""
+
+function Metropolis(m::MicroEstados,β::Float64,conf::String)
+    aceptado = false
+    
+    while aceptado == false
+    #for i in 1:m.N^2
+    
+        ΔE, i, j, k = eleccionDeMicroEstado(m,conf)
+    
+        parametro = exp(-β*ΔE) #min(1.,exp(-β*ΔE))
+        
+        if ΔE < 0 || rand() < parametro #con < se viola la segunda ley de la termodinámica. No digas mamadas
+            aceptado = true             #la configuración caliente se ordena a un ferromagneto.
+            volteaSpin(m,i,j,k,conf)
+        end
+        E = energiaTotal(m,conf)
+        M = magnetizacion(m,conf)
+        return E , M
+    end
+end
+
+
+"""
+Simulación montecarlo, es utilizar metropolis para un número n de pasos.
+
+Parámetros
+
+m := MicroEstados
+T := Temperatura
+n := número de pasos
+conf := configuración caliente o fria
+
+
+"""
+function simulacionMontecarlo(m::MicroEstados,T,n::Int,conf::String)
+    β = 1/T
+
+    energiaFinal = zeros(n)
+    magnFinal = zeros(n)
+        
+    for i in 1:n
+        ΔE , ΔM = Metropolis(m,β,conf) 
+        energiaFinal[i] = ΔE
+        magnFinal[i] = ΔM
+    end
+    return energiaFinal, magnFinal
+end
+
+"""
+Es una función alternativa al cálculo de la simulación, voy a ver si mejor la optimizo en dos
+partes como las anteriores a ver si funciona porque tarda bastante en compilarse para una 
+red de 50: 900 segundos aproximadamente. 
+
+Actualización 13abril: ya no pude optimizar la función. Me voy a quedar por el momento con las
+anteriores porque para 100mil pasos me tarda dos minutos y eso es considerablemente menos que
+los 900 segundos de termalización.
+
+Siempre si pude, esta función tarda lo mismo que las anteriores. Quedó solucionado el asunto y 
+de hecho tarda aproximadamente lo mismo que la otra alternativa
+"""
+
+
+function termalizacion(m::MicroEstados,T,n::Int,conf::String)
+    eFinal = zeros(n)
+    mFinal = zeros(n)
+    for k in 1:n 
+        i = rand(1:m.N^2)
+        dE = -energia_i(m,i,conf)
+        parametro = exp(-dE/T)
+        if dE < 0 || rand() < parametro
+            volteaSpin1(m,i,conf)
+        end
+        ET = energiaTotal(m,conf)
+        MT = magnetizacion(m,conf)
+        eFinal[k] = ET
+        mFinal[k] = MT
+    end
+    return eFinal, mFinal
+end
+
+
+# CANTIDADES OBSERVABLES
+
+# En esta sección se van a determinar la energia, magnetización, calor específico y susceptibilidad magnética
+# dado un conjunto de temperaturas. La idea es utilizar los algorítmos de metropolis para poder obtener 
+# los resultados.
+
+"""
+Comenzamos con las primeras pruebas una vez que ya obtuvimos buenos resultados de ambas simulaciones montecarlo.
+Vamos a comnezar por la energía y la magnetización. La idea es que dado un arreglo de temperaturas, se debe
+obtener la energía y magnetización final de cada simulación...
+
+cantidadesFinales de momento es menos eficiente que cantidadesObservables. Tarda considerablemente 
+más en compilar sobre todo para cuando se trata de 100 000 iteraciones, se tarda varios minutos más.
+Nos quedamos de momento con cantidadesObservables
+"""
+
+
+function cantidadesFinales(m::MicroEstados,T,n::Int,conf::String)
+    # energias = zeros(length(T))
+    # magn = zeros(length(T))
+    energias = []
+    magn = []
+    for t in 1:length(T)
+        E = []
+        M = []
+        for i in 1:n
+            Metropolis(m,1/T[t],conf) 
+            for l in mod(i,10)
+                push!(E,energiaTotal(m,conf))
+                push!(M,magnetizacion(m,conf))
+            end
+        end
+        # energias[t] = mean(E)/m.N^2
+        # magn[t] = mean(M)/m.N^2
+        push!(energias,mean(E)/m.N^2)
+        push!(magn,mean(M)/m.N^2)
+    end
+    return energias, magn
+end
+
+function cantidadesObservables(m::MicroEstados,T,n::Int,conf::String)
+    eFinal = []
+    mFinal = []
+    calorEsp = []
+    suscepMagn = []
+    for t in 1:length(T)
+        E = []
+        M = []
+        for j in 1:n 
+            i = rand(1:m.N^2)
+            dE = -energia_i(m,i,conf)
+            parametro = exp(-dE/T[t])
+            if dE < 0 || rand() < parametro
+                volteaSpin1(m,i,conf)
+            end 
+            for k in mod(j,10)
+                push!(E,energiaTotal(m,conf))
+                push!(M,magnetizacion(m,conf))
+            end
+        end
+        push!(eFinal,mean(E)/m.N^2)
+        push!(mFinal,mean(M)/m.N^2)
+        push!(calorEsp,c_H(E,T[t]))
+        push!(suscepMagn,χ(M,T[t]))
+    end
+    return eFinal, mFinal, calorEsp/m.N^2, suscepMagn/m.N^2
+end
+
+"""
+Nos quedamos con cantidades observables para trabajar. Hasta este punto, nos hace falta definir la
+capacidad calorífica y la susceptibilidad magnética.
+"""
+
+c_H(energias,T::Float64) = (1/T^2)*var(energias)
+
+χ(magn,T::Float64) = var(magn)/T
